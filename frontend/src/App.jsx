@@ -9,6 +9,7 @@ import {
   onCleanup,
   batch,
 } from "solid-js";
+import { Portal } from "solid-js/web";
 import ExpandedCard from "./components/expanded-card";
 import { debounce } from "@solid-primitives/scheduled";
 import { api } from "./api";
@@ -53,8 +54,11 @@ function App() {
   const [renderUID, setRenderUID] = createSignal(v7());
   const [selectionMode, setSelectionMode] = createSignal(false);
   const [selectedCards, setSelectedCards] = createSignal(new Set());
+  const [focusedCardId, setFocusedCardId] = createSignal(null);
+  const [showHelpDialog, setShowHelpDialog] = createSignal(false);
   const location = useLocation();
   const navigate = useNavigate();
+  let mainContainerRef;
 
   const basePath = createMemo(() => {
     if ((import.meta.env.BASE_URL || "").endsWith("/")) {
@@ -340,6 +344,61 @@ function App() {
     setCards(cardsWithoutDeletedCard);
   }
 
+  function moveCardToLane(card, newLane) {
+    // Move card to a different lane (used for keyboard shortcuts)
+    fetch(`${api}/resource${board()}/${encodeURIComponent(card.lane)}/${encodeURIComponent(card.name)}.md`, {
+      method: "PATCH",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        newPath: `${board()}/${newLane}/${card.name}.md`,
+      }),
+    });
+
+    const newCards = structuredClone(cards());
+    const cardIndex = newCards.findIndex((c) => c.name === card.name);
+    if (cardIndex !== -1) {
+      newCards[cardIndex].lane = newLane;
+      setCards(newCards);
+
+      // Keep focus on the moved card
+      setTimeout(() => {
+        document.getElementById(`card-${card.name}`)?.focus();
+      }, 50);
+    }
+  }
+
+  function moveCardInLane(card, direction) {
+    // Move card up or down within its current lane
+    const laneCards = getCardsFromLane(card.lane);
+    const currentIndex = laneCards.findIndex((c) => c.name === card.name);
+
+    if (currentIndex === -1) return;
+
+    // Calculate new index
+    const newIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+
+    // Check bounds
+    if (newIndex < 0 || newIndex >= laneCards.length) return;
+
+    // Reorder cards in the lane
+    const reorderedLaneCards = [...laneCards];
+    const [movedCard] = reorderedLaneCards.splice(currentIndex, 1);
+    reorderedLaneCards.splice(newIndex, 0, movedCard);
+
+    // Update all cards with new order
+    const newCards = structuredClone(cards());
+    const otherLaneCards = newCards.filter((c) => c.lane !== card.lane);
+    const allCards = [...otherLaneCards, ...reorderedLaneCards];
+
+    setCards(allCards);
+
+    // Keep focus on the moved card
+    setTimeout(() => {
+      document.getElementById(`card-${card.name}`)?.focus();
+    }, 50);
+  }
+
   async function createNewLane() {
     const newLanes = structuredClone(lanes());
     const newName = v7();
@@ -473,13 +532,13 @@ function App() {
     const selectedCardsList = cards().filter((card) =>
       selectedCards().has(getCardKey(card))
     );
-    
+
     const allTagsOnSelected = new Set();
     selectedCardsList.forEach((card) => {
       const cardTags = getTagsFromContent(card.content || "");
       cardTags.forEach((tag) => allTagsOnSelected.add(tag));
     });
-    
+
     return Array.from(allTagsOnSelected);
   });
 
@@ -515,7 +574,7 @@ function App() {
     const updatePromises = cardsToUpdate.map(async (card) => {
       const content = card.content || "";
       const currentTags = getTagsFromContent(content);
-      
+
       // Skip if card already has this tag
       if (currentTags.some((t) => t.toLowerCase() === tagName.toLowerCase())) {
         return;
@@ -545,7 +604,7 @@ function App() {
     const updatePromises = cardsToUpdate.map(async (card) => {
       const content = card.content || "";
       const currentTags = getTagsFromContent(content);
-      
+
       // Skip if card doesn't have this tag
       if (!currentTags.some((t) => t.toLowerCase() === tagName.toLowerCase())) {
         return;
@@ -606,6 +665,11 @@ function App() {
     newCards[newCardIndex] = newCard;
     setCards(newCards);
     setCardBeingRenamed(null);
+    // Restore focus to the renamed card
+    setTimeout(() => {
+      setFocusedCardId(newCardNameWithoutSpaces);
+      document.getElementById(`card-${newCardNameWithoutSpaces}`)?.focus();
+    }, 50);
   }
 
   async function updateTagColorFromExpandedCard(tagColor) {
@@ -810,8 +874,256 @@ function App() {
     }
   });
 
+  // Auto-focus first card on initial load for keyboard navigation
+  createEffect(() => {
+    // Only auto-focus if no card is currently focused and we have cards
+    if (!focusedCardId() && !selectedCard() && lanes().length > 0) {
+      setTimeout(() => {
+        // Find the first card in the first lane
+        const firstLane = lanes()[0];
+        const firstLaneCards = getCardsFromLane(firstLane);
+        if (firstLaneCards.length > 0) {
+          const firstCard = firstLaneCards[0];
+          setFocusedCardId(firstCard.name);
+          document.getElementById(`card-${firstCard.name}`)?.focus();
+        }
+      }, 100);
+    }
+  });
+
+  function handleMainBoardKeyDown(e) {
+    // Don't interfere with input fields
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+      return;
+    }
+
+    // Don't interfere when a card is expanded
+    if (selectedCard()) {
+      return;
+    }
+
+    const visibleCards = filteredCards();
+
+    // Allow certain keys to work even when there are no cards
+    const allowedKeysWithoutCards = ['n', '?', 'Escape'];
+    if (!visibleCards.length && !allowedKeysWithoutCards.includes(e.key)) {
+      return;
+    }
+
+    switch(e.key) {
+      case 'ArrowDown':
+      case 'j': // vim-style navigation
+        e.preventDefault();
+        if (focusedCardId()) {
+          // Find the actual focused card and get cards in the same lane
+          const currentCard = cards().find(c => c.name === focusedCardId());
+          if (currentCard) {
+            // Alt+Down: Move card down in the lane
+            if (e.altKey) {
+              moveCardInLane(currentCard, 'down');
+            } else {
+              // Normal Down: Navigate to next card in lane
+              const currentLaneCards = getCardsFromLane(currentCard.lane);
+              const currentIndexInLane = currentLaneCards.findIndex(c => c.name === focusedCardId());
+              if (currentIndexInLane < currentLaneCards.length - 1) {
+                const nextCard = currentLaneCards[currentIndexInLane + 1];
+                setFocusedCardId(nextCard.name);
+                document.getElementById(`card-${nextCard.name}`)?.focus();
+              }
+            }
+          }
+        } else if (visibleCards.length > 0) {
+          // If nothing focused, focus first card
+          const firstCard = visibleCards[0];
+          setFocusedCardId(firstCard.name);
+          document.getElementById(`card-${firstCard.name}`)?.focus();
+        }
+        break;
+
+      case 'ArrowUp':
+      case 'k': // vim-style navigation
+        e.preventDefault();
+        if (focusedCardId()) {
+          // Find the actual focused card and get cards in the same lane
+          const currentCard = cards().find(c => c.name === focusedCardId());
+          if (currentCard) {
+            // Alt+Up: Move card up in the lane
+            if (e.altKey) {
+              moveCardInLane(currentCard, 'up');
+            } else {
+              // Normal Up: Navigate to previous card in lane
+              const currentLaneCards = getCardsFromLane(currentCard.lane);
+              const currentIndexInLane = currentLaneCards.findIndex(c => c.name === focusedCardId());
+              if (currentIndexInLane > 0) {
+                const prevCard = currentLaneCards[currentIndexInLane - 1];
+                setFocusedCardId(prevCard.name);
+                document.getElementById(`card-${prevCard.name}`)?.focus();
+              }
+            }
+          }
+        } else if (visibleCards.length > 0) {
+          // If nothing focused, focus first card
+          const firstCard = visibleCards[0];
+          setFocusedCardId(firstCard.name);
+          document.getElementById(`card-${firstCard.name}`)?.focus();
+        }
+        break;
+
+      case 'ArrowRight':
+      case 'l': // vim-style navigation
+        e.preventDefault();
+        if (focusedCardId()) {
+          // Find the actual focused card from all cards, not just visible filtered ones
+          const currentCard = cards().find(c => c.name === focusedCardId());
+          if (currentCard) {
+            const currentLaneIndex = lanes().indexOf(currentCard.lane);
+
+            // Alt+Right: Move card to next lane (if exists)
+            if (e.altKey) {
+              if (currentLaneIndex < lanes().length - 1) {
+                const nextLane = lanes()[currentLaneIndex + 1];
+                moveCardToLane(currentCard, nextLane);
+              }
+            } else {
+              // Normal Right: Navigate to first card in next non-empty lane
+              for (let i = currentLaneIndex + 1; i < lanes().length; i++) {
+                const nextLaneCards = getCardsFromLane(lanes()[i]);
+                if (nextLaneCards.length > 0) {
+                  setFocusedCardId(nextLaneCards[0].name);
+                  document.getElementById(`card-${nextLaneCards[0].name}`)?.focus();
+                  break;
+                }
+              }
+            }
+          }
+        } else if (visibleCards.length > 0) {
+          // If nothing focused, focus first card
+          const firstCard = visibleCards[0];
+          setFocusedCardId(firstCard.name);
+          document.getElementById(`card-${firstCard.name}`)?.focus();
+        }
+        break;
+
+      case 'ArrowLeft':
+      case 'h': // vim-style navigation
+        e.preventDefault();
+        if (focusedCardId()) {
+          // Find the actual focused card from all cards, not just visible filtered ones
+          const currentCard = cards().find(c => c.name === focusedCardId());
+          if (currentCard) {
+            const currentLaneIndex = lanes().indexOf(currentCard.lane);
+
+            // Alt+Left: Move card to previous lane (if exists)
+            if (e.altKey) {
+              if (currentLaneIndex > 0) {
+                const prevLane = lanes()[currentLaneIndex - 1];
+                moveCardToLane(currentCard, prevLane);
+              }
+            } else {
+              // Normal Left: Navigate to first card in previous non-empty lane
+              for (let i = currentLaneIndex - 1; i >= 0; i--) {
+                const prevLaneCards = getCardsFromLane(lanes()[i]);
+                if (prevLaneCards.length > 0) {
+                  setFocusedCardId(prevLaneCards[0].name);
+                  document.getElementById(`card-${prevLaneCards[0].name}`)?.focus();
+                  break;
+                }
+              }
+            }
+          }
+        } else if (visibleCards.length > 0) {
+          // If nothing focused, focus first card
+          const firstCard = visibleCards[0];
+          setFocusedCardId(firstCard.name);
+          document.getElementById(`card-${firstCard.name}`)?.focus();
+        }
+        break;
+
+      case 'Enter':
+      case 'e': // Edit card
+        e.preventDefault();
+        if (focusedCardId()) {
+          const card = cards().find(c => c.name === focusedCardId());
+          if (card) {
+            navigate(`${basePath()}${board()}/${card.name}.md`);
+          }
+        }
+        break;
+
+      case 'n': // New card
+        e.preventDefault();
+        if (lanes().length > 0) {
+          const currentCard = focusedCardId()
+            ? cards().find(c => c.name === focusedCardId())
+            : null;
+          const targetLane = currentCard ? currentCard.lane : lanes()[0];
+          createNewCard(targetLane);
+        }
+        break;
+
+      case 'r': // Rename card
+        e.preventDefault();
+        if (focusedCardId()) {
+          const card = cards().find(c => c.name === focusedCardId());
+          if (card) {
+            startRenamingCard(card);
+          }
+        }
+        break;
+
+      case 'd': // Delete card (with confirmation)
+        e.preventDefault();
+        if (focusedCardId()) {
+          const card = cards().find(c => c.name === focusedCardId());
+          if (card && confirm(`Delete card "${card.name}"?`)) {
+            // Find cards in the same lane for next focus
+            const currentLaneCards = getCardsFromLane(card.lane);
+            const currentIndexInLane = currentLaneCards.findIndex(c => c.name === focusedCardId());
+
+            deleteCard(card);
+
+            // Wait for the DOM to update, then focus next or previous card in the same lane
+            setTimeout(() => {
+              if (currentIndexInLane < currentLaneCards.length - 1) {
+                const nextCard = currentLaneCards[currentIndexInLane + 1];
+                setFocusedCardId(nextCard.name);
+                document.getElementById(`card-${nextCard.name}`)?.focus();
+              } else if (currentIndexInLane > 0) {
+                const prevCard = currentLaneCards[currentIndexInLane - 1];
+                setFocusedCardId(prevCard.name);
+                document.getElementById(`card-${prevCard.name}`)?.focus();
+              } else {
+                setFocusedCardId(null);
+              }
+            }, 50);
+          }
+        }
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        if (showHelpDialog()) {
+          setShowHelpDialog(false);
+        } else {
+          setFocusedCardId(null);
+          mainContainerRef?.focus();
+        }
+        break;
+
+      case '?': // Help
+        e.preventDefault();
+        setShowHelpDialog(true);
+        break;
+    }
+  }
+
   return (
-    <>
+    <div
+      ref={(el) => mainContainerRef = el}
+      tabIndex="-1"
+      onKeyDown={handleMainBoardKeyDown}
+      style={{ outline: 'none', height: '100%', display: 'flex', 'flex-direction': 'column' }}
+    >
       <Header
         search={search()}
         onSearchChange={setSearch}
@@ -892,6 +1204,8 @@ function App() {
                         onSelectionChange={(isSelected) =>
                           toggleCardSelection(getCardKey(card), isSelected)
                         }
+                        isFocused={focusedCardId() === card.name}
+                        onFocus={() => setFocusedCardId(card.name)}
                         onClick={() => {
                           if (!selectionMode()) {
                             let cardUrl = basePath();
@@ -924,8 +1238,16 @@ function App() {
                                 )
                               }
                               onCancel={() => {
+                                const cardName = cardBeingRenamed()?.name;
                                 setNewCardName(null);
                                 setCardBeingRenamed(null);
+                                // Restore focus to the card
+                                setTimeout(() => {
+                                  if (cardName) {
+                                    setFocusedCardId(cardName);
+                                    document.getElementById(`card-${cardName}`)?.focus();
+                                  }
+                                }, 50);
                               }}
                             />
                           ) : (
@@ -960,7 +1282,17 @@ function App() {
             tags={selectedCard().tags || []}
             tagsOptions={tagsOptions()}
             onClose={() => {
+              const cardName = selectedCard().name;
               navigate(`${basePath()}${board()}` || "/");
+              // Restore focus to the card after navigation
+              setTimeout(() => {
+                setFocusedCardId(cardName);
+                const cardElement = document.getElementById(`card-${cardName}`);
+                if (cardElement) {
+                  cardElement.focus();
+                  cardElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+              }, 50);
             }}
             onContentChange={(value) =>
               debounceChangeCardContent(value, selectedCard().id)
@@ -982,7 +1314,84 @@ function App() {
           />
         </Show>
       </Show>
-    </>
+      <Show when={showHelpDialog()}>
+        <Portal>
+          <div
+            class="dialog-backdrop"
+            onClick={() => setShowHelpDialog(false)}
+          >
+            <dialog
+              open
+              onClick={(e) => e.stopPropagation()}
+              style={{ "max-width": "400px", "max-height": "80vh" }}
+            >
+              <div class="dialog__body" style={{ padding: "20px", gap: "16px", overflow: "auto", "line-height": "1 !important;" }}>
+                <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "8px" }}>
+                  <h2 style={{ margin: "0", "font-size": "20px", color: "var(--color-foreground)" }}>Keyboard Shortcuts</h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelpDialog(false)}
+                    style={{ "font-size": "20px", padding: "2px 8px", background: "transparent", border: "none", cursor: "pointer", color: "var(--color-foreground)" }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", "flex-direction": "column", gap: "16px", "margin-left": "auto", "margin-right": "auto" }}>
+                  <div>
+                    <h3 style={{ "margin-top": "0", "margin-bottom": "8px", "font-size": "14px", color: "var(--color-foreground)" }}>Navigation</h3>
+                    <table style={{ width: "100%", "border-collapse": "collapse", "font-size": "13px" }}>
+                      <tbody>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>↑ or k</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move focus to card above</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>↓ or j</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move focus to card below</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>← or h</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move focus to previous lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>→ or l</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move focus to next lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Alt+↑</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move card up within lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Alt+↓</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move card down within lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Alt+←</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move card to previous lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Alt+→</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Move card to next lane</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div>
+                    <h3 style={{ "margin-top": "0", "margin-bottom": "8px", "font-size": "14px", color: "var(--color-foreground)" }}>Card Actions</h3>
+                    <table style={{ width: "100%", "border-collapse": "collapse", "font-size": "13px" }}>
+                      <tbody>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Enter or e</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Open/edit focused card</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>n</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Create new card in current lane</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>r</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Rename focused card</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>d</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Delete focused card (with confirmation)</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div>
+                    <h3 style={{ "margin-top": "0", "margin-bottom": "8px", "font-size": "14px", color: "var(--color-foreground)" }}>General</h3>
+                    <table style={{ width: "100%", "border-collapse": "collapse", "font-size": "13px" }}>
+                      <tbody>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>Esc</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Clear focus / Close dialog</td></tr>
+                        <tr><td style={{ padding: "3px 12px 3px 0", "font-family": "monospace", "white-space": "nowrap", color: "var(--color-foreground)" }}>?</td><td style={{ padding: "3px 0", color: "var(--color-foreground)" }}>Show this help dialog</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div style={{ "text-align": "center", "margin-top": "12px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelpDialog(false)}
+                    style={{ padding: "6px 20px" }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </dialog>
+          </div>
+        </Portal>
+      </Show>
+    </div>
   );
 }
 

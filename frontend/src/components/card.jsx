@@ -13,6 +13,8 @@ import { handleKeyDown } from "../utils";
  * @param {boolean} props.selectionMode
  * @param {boolean} props.isSelected
  * @param {Function} props.onSelectionChange
+ * @param {boolean} props.isFocused
+ * @param {Function} props.onFocus
  */
 export function Card(props) {
 
@@ -39,15 +41,21 @@ export function Card(props) {
     }
     const [year, month, day] = props.dueDate.split('-')
     const dueDateLocalTime = new Date(year, month - 1, day);
-    return `Due ${dueDateLocalTime.toLocaleDateString()}` 
+    return `Due ${dueDateLocalTime.toLocaleDateString()}`
   })
 
   return (
     <div
       role="button"
       id={`card-${props.name}`}
-      class={`card ${props.disableDrag ? "card__drag-disabled" : ""} ${props.isSelected ? "card--selected" : ""}`}
-      onKeyDown={(e) => handleKeyDown(e, props.onClick)}
+      class={`card ${props.disableDrag ? "card__drag-disabled" : ""} ${props.isSelected ? "card--selected" : ""} ${props.isFocused ? "card--focused" : ""}`}
+      onKeyDown={(e) => {
+        // Only handle Enter key, let arrow keys bubble up to board-level handler
+        if (e.key === "Enter") {
+          handleKeyDown(e, props.onClick);
+        }
+      }}
+      onFocus={() => props.onFocus?.()}
       onClick={e => {
         const isDescendant = e.currentTarget === e.target || e.currentTarget.contains(e.target);
         if (!isDescendant) {

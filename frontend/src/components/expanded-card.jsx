@@ -320,6 +320,13 @@ function ExpandedCard(props) {
     }
   }
 
+  function handleDialogKeyDown(e) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      handleDialogCancel();
+    }
+  }
+
   function handleChangeDueDate(e) {
     const newContent = setDueDateInContent(props.content, e.target.value);
     editor().content = newContent;
@@ -343,9 +350,7 @@ function ExpandedCard(props) {
             dialogRef = el;
           }}
           class={`${isMaximized() === "true" ? "dialog--maximized" : ""}`}
-          onKeyDown={(e) =>
-            handleKeyDown(e, (event) => event.stopPropagation())
-          }
+          onKeyDown={handleDialogKeyDown}
           onCancel={handleDialogCancel}
         >
           <div class="dialog__body">

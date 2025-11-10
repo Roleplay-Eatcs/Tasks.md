@@ -848,6 +848,17 @@ a > * {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
+.card--focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(var(--color-accent-rgb, 59, 130, 246), 0.1);
+}
+
+.card--focused:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 /* Header button active state */
 .button--active {
   background: var(--color-accent) !important;
