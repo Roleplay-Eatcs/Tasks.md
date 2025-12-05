@@ -237,6 +237,74 @@ async function getSort(ctx) {
 
 router.get("/sort/:path*", getSort);
 
+const { spawn } = require('child_process');
+
+async function runAutoschedule(ctx) {
+  try {
+    const pythonProcess = spawn('python3', ['-m', 'autoschedule.main'], {
+      cwd: '/autoschedule',
+      env: {
+        ...process.env,
+        TODO_DIR_PATH: TASKS_DIR,
+        AUTO_CONFIRM: 'true',
+        CALDAV_URL: process.env.CALDAV_URL || '',
+        CALDAV_USERNAME: process.env.CALDAV_USERNAME || '',
+        CALDAV_PASSWORD_FILE: process.env.CALDAV_PASSWORD_FILE || '',
+        AI_API_FILE: process.env.AI_API_FILE || '',
+        WORK_START_HOUR: process.env.WORK_START_HOUR || '9',
+        WORK_END_HOUR: process.env.WORK_END_HOUR || '17',
+        TIMEZONE: process.env.TIMEZONE || 'UTC',
+        DEFAULT_CALENDAR: process.env.DEFAULT_CALENDAR || '',
+        CLAUDE_MODEL: process.env.CLAUDE_MODEL || 'claude-haiku-4-5',
+      }
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    // Wait for process to complete with 30 second timeout
+    const processPromise = new Promise((resolve, reject) => {
+      pythonProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Autoschedule failed with exit code ${code}: ${stderr}`));
+        }
+      });
+    });
+
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Autoschedule timeout after 30 seconds')), 30000);
+    });
+
+    await Promise.race([processPromise, timeoutPromise]);
+
+    console.log('Autoschedule stdout:', stdout);
+    ctx.body = {
+      success: true,
+      message: 'Tasks scheduled successfully'
+    };
+    ctx.status = 200;
+  } catch (error) {
+    console.error('Autoschedule error:', error);
+    ctx.body = {
+      success: false,
+      error: error.message
+    };
+    ctx.status = 500;
+  }
+}
+
+router.post("/autoschedule", runAutoschedule);
+
 app.use(cors());
 app.use(bodyParser());
 

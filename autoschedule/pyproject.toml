@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoschedule"
+version = "0.1.0"
+description = "AI-powered task scheduler that reads todos from markdown and schedules them intelligently"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "caldav>=1.3.9",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "anthropic>=0.18.0",
+    "python-dateutil>=2.8.2",
+    "pytz>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "flake8>=6.0",
+]
+
+[project.scripts]
+autoschedule = "autoschedule.main:main"

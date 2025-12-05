@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, onMount, For } from "solid-js";
+import { api } from "../api";
 
 /**
  *
@@ -16,6 +17,38 @@ import { createEffect, createMemo, createSignal, onMount, For } from "solid-js";
  * @param {Function} props.onSelectionModeChange
  */
 export function Header(props) {
+  const [isScheduling, setIsScheduling] = createSignal(false);
+  const [scheduleMessage, setScheduleMessage] = createSignal(null);
+
+  const handleAutoschedule = async () => {
+    if (isScheduling()) return;
+
+    setIsScheduling(true);
+    setScheduleMessage(null);
+
+    try {
+      const response = await fetch(`${api}/autoschedule`, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setScheduleMessage({ type: 'success', text: 'Tasks scheduled successfully!' });
+      } else {
+        setScheduleMessage({ type: 'error', text: `Scheduling failed: ${result.error}` });
+      }
+    } catch (error) {
+      setScheduleMessage({ type: 'error', text: 'Network error occurred' });
+      console.error('Autoschedule error:', error);
+    } finally {
+      setIsScheduling(false);
+      setTimeout(() => setScheduleMessage(null), 5000);
+    }
+  };
+
   const filterSelect = createMemo(() => {
     if (!props.tagOptions.length) {
       return null;
@@ -70,15 +103,28 @@ export function Header(props) {
           <option value="tight">Tight</option>
         </select>
       </div>
-      <button 
-        type="button" 
+      <button
+        type="button"
         onClick={props.onNewLaneBtnClick}
         disabled={props.selectionMode}
       >
         New lane
       </button>
-      <button 
-        type="button" 
+      <button
+        type="button"
+        onClick={handleAutoschedule}
+        disabled={props.selectionMode || isScheduling()}
+        title="Schedule tasks to calendar"
+      >
+        {isScheduling() ? 'Scheduling...' : 'Auto Schedule'}
+      </button>
+      {scheduleMessage() && (
+        <div class={`schedule-notification schedule-notification--${scheduleMessage().type}`}>
+          {scheduleMessage().text}
+        </div>
+      )}
+      <button
+        type="button"
         onClick={() => props.onSelectionModeChange?.(!props.selectionMode)}
         class={props.selectionMode ? "button--active" : ""}
       >

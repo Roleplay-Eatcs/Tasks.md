@@ -1,5 +1,5 @@
 # ![logo](public/logo.png) Tasks.md
-A self-hosted, Markdown file based task management board.
+A self-hosted, Markdown file based task management board, forked to allow for AI autoscheduling of events in a specific lane.
 
 
 ![Demo](./public/demo.gif)

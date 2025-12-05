@@ -21,9 +21,16 @@ RUN set -eux && npm ci --no-audit
 
 FROM alpine:3.20 AS final
 USER root
-RUN set -eux && apk add --no-cache nodejs npm
+RUN set -eux && apk add --no-cache nodejs npm python3 py3-pip gcc musl-dev python3-dev
 RUN mkdir /stylesheets
 
+# Autoschedule setup
+COPY autoschedule/requirements.txt /autoschedule/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /autoschedule/requirements.txt
+COPY autoschedule/src/ /autoschedule/src/
+COPY autoschedule/pyproject.toml /autoschedule/pyproject.toml
+WORKDIR /autoschedule
+RUN pip3 install --break-system-packages -e .
 COPY --from=build-stage /app /app
 COPY --from=build-stage /api/ /api/
 
